@@ -1,149 +1,63 @@
 use serde::{Deserialize, Serialize};
+use sqlx::FromRow;
 
-#[derive(Serialize, sqlx::FromRow)]
-pub struct Bimester {
-    pub id: i32,
-    pub name: String,
+// ============================================
+// ENUMS
+// ============================================
+
+/// ENUM para roles de usuario (debe coincidir con PostgreSQL)
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type)]
+#[sqlx(type_name = "user_role", rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum UserRole {
+    Docente,
+    Apoderado,
+    Alumno,
+    Admin,
 }
 
-#[derive(Serialize, sqlx::FromRow)]
-pub struct Grade {
-    pub id: i32,
-    pub bimester_id: i32,
-    pub number: i32,
+// Implementar Display para facilitar conversión a String
+impl std::fmt::Display for UserRole {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            UserRole::Docente => write!(f, "DOCENTE"),
+            UserRole::Apoderado => write!(f, "APODERADO"),
+            UserRole::Alumno => write!(f, "ALUMNO"),
+            UserRole::Admin => write!(f, "ADMIN"),
+        }
+    }
 }
 
-#[derive(Serialize, sqlx::FromRow)]
-pub struct Section {
-    pub id: i32,
-    pub grade_id: i32,
-    pub letter: String,
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type)]
+#[sqlx(type_name = "account_status", rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum UserStatus {
+    Active,
+    Inactive,
+    Suspended,
+    Pending,
 }
 
-#[derive(Serialize, Deserialize, sqlx::FromRow)]
-pub struct NewName {
-    pub full_name: String,
-}
-
-#[derive(Serialize, sqlx::FromRow)]
-pub struct Student {
-    pub id: i32,
-    pub section_id: i32,
-    pub full_name: String,
-}
-
-#[derive(Serialize, Deserialize, sqlx::FromRow)]
-pub struct Session {
-    pub id: i32,
-    pub section_id: i32,
-    pub number: i32,
-    pub title: Option<String>,
-    pub date: Option<chrono::NaiveDate>,
-    pub created_at: chrono::NaiveDateTime,
-}
-#[derive(Debug, Serialize, sqlx::FromRow)]
-pub struct Competency {
-    pub id: i32,
-    pub session_id: i32,
-    pub number: i32,
-    pub name: Option<String>,
-    pub description: Option<String>,
-}
-
-#[derive(Serialize, sqlx::FromRow)]
-pub struct Product {
-    pub id: i32,
-    pub session_id: i32,
-    pub number: i32,
-    pub name: Option<String>,
-    pub description: Option<String>,
-}
-
-#[derive(Serialize, sqlx::FromRow)]
-pub struct Ability {
-    pub id: i32,
-    pub competency_id: i32,
-    pub number: i32,
-    pub name: Option<String>,
-    pub description: Option<String>,
-}
-
-#[derive(Serialize, sqlx::FromRow)]
-pub struct Criterion {
-    pub id: i32,
-    pub ability_id: i32,
-    pub number: i32,
-    pub name: Option<String>,
-    pub description: Option<String>,
-}
-
-#[derive(Deserialize, sqlx::FromRow)]
-pub struct EvalValueIn {
-    pub session_id: i32,
-    pub competency_id: i32,
-    pub ability_id: i32,
-    pub criterion_id: i32,
-    pub product_id: i32,
-    pub student_id: i32,
-    pub value: String, // "AD","A","B","C"
-    pub observation: Option<String>,
-}
-
-#[derive(Serialize, sqlx::FromRow)]
-pub struct EvaluationItem {
-    pub id: i32,
-    pub session_id: i32,
-    pub competency_id: i32,
-    pub ability_id: i32,
-    pub criterion_id: i32,
-    pub product_id: i32,
-    pub student_id: i32,
-    pub value: String, // "AD", "A", "B", "C"
-    pub updated_at: chrono::NaiveDateTime,
-    pub observation: Option<String>,
-}
-
-#[derive(Serialize, sqlx::FromRow)]
-pub struct MatrixResponse {
-    pub locked: bool,
-    pub competency: serde_json::Value,
-    pub abilities: Vec<serde_json::Value>,
-    pub criteria: Vec<serde_json::Value>,
-    pub products: Vec<serde_json::Value>,
-    pub students: Vec<serde_json::Value>,
-    pub values: Vec<serde_json::Value>,
-}
-
-//nuevos modelos paraa el endpoint de dashboard
-#[derive(Serialize)]
-#[allow(dead_code)]
-pub struct BimesterWithGrades {
-    pub id: i32,
-    pub name: String,
-    pub grades: Vec<GradeWithSections>,
-}
-
-#[derive(Serialize)]
-#[allow(dead_code)]
-pub struct GradeWithSections {
-    pub id: i32,
-    pub bimester_id: i32,
-    pub number: i32,
-    pub sections: Vec<Section>,
+impl std::fmt::Display for UserStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            UserStatus::Active => write!(f, "ACTIVE"),
+            UserStatus::Inactive => write!(f, "INACTIVE"),
+            UserStatus::Suspended => write!(f, "SUSPENDED"),
+            UserStatus::Pending => write!(f, "PENDING"),
+        }
+    }
 }
 
 // ============================================
 // MODELOS DE AUTENTICACIÓN
 // ============================================
-use sqlx::FromRow;
 
 #[derive(Debug, Serialize, Deserialize, FromRow)]
 pub struct User {
     pub id: i32,
     pub firebase_uid: String,
     pub email: String,
-    pub role: String,   // DOCENTE, APODERADO, ALUMNO, ADMIN
-    pub status: String, // ACTIVE, INACTIVE, SUSPENDED, PENDING
+    pub role: UserRole,     // ✅ Ahora usa el ENUM
+    pub status: UserStatus, // ✅ También el status
     pub created_at: Option<chrono::NaiveDateTime>,
     pub updated_at: Option<chrono::NaiveDateTime>,
     pub last_login: Option<chrono::NaiveDateTime>,
@@ -241,7 +155,7 @@ pub struct ApiResponse<T> {
 pub struct UserResponse {
     pub id: i32,
     pub email: String,
-    pub role: String,
+    pub role: String, // ✅ Aquí puede quedarse String para la respuesta JSON
     pub status: String,
     pub profile_data: serde_json::Value,
 }
@@ -250,4 +164,140 @@ pub struct UserResponse {
 pub struct ErrorResponse {
     pub error: String,
     pub details: Option<String>,
+}
+
+// ============================================
+// OTROS MODELOS (sin cambios)
+// ============================================
+
+#[derive(Serialize, sqlx::FromRow)]
+pub struct Bimester {
+    pub id: i32,
+    pub name: String,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+pub struct Grade {
+    pub id: i32,
+    pub bimester_id: i32,
+    pub number: i32,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+pub struct Section {
+    pub id: i32,
+    pub grade_id: i32,
+    pub letter: String,
+}
+
+#[derive(Serialize, Deserialize, sqlx::FromRow)]
+pub struct NewName {
+    pub full_name: String,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+pub struct Student {
+    pub id: i32,
+    pub section_id: i32,
+    pub full_name: String,
+}
+
+#[derive(Serialize, Deserialize, sqlx::FromRow)]
+pub struct Session {
+    pub id: i32,
+    pub section_id: i32,
+    pub number: i32,
+    pub title: Option<String>,
+    pub date: Option<chrono::NaiveDate>,
+    pub created_at: chrono::NaiveDateTime,
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct Competency {
+    pub id: i32,
+    pub session_id: i32,
+    pub number: i32,
+    pub name: Option<String>,
+    pub description: Option<String>,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+pub struct Product {
+    pub id: i32,
+    pub session_id: i32,
+    pub number: i32,
+    pub name: Option<String>,
+    pub description: Option<String>,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+pub struct Ability {
+    pub id: i32,
+    pub competency_id: i32,
+    pub number: i32,
+    pub name: Option<String>,
+    pub description: Option<String>,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+pub struct Criterion {
+    pub id: i32,
+    pub ability_id: i32,
+    pub number: i32,
+    pub name: Option<String>,
+    pub description: Option<String>,
+}
+
+#[derive(Deserialize, sqlx::FromRow)]
+pub struct EvalValueIn {
+    pub session_id: i32,
+    pub competency_id: i32,
+    pub ability_id: i32,
+    pub criterion_id: i32,
+    pub product_id: i32,
+    pub student_id: i32,
+    pub value: String,
+    pub observation: Option<String>,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+pub struct EvaluationItem {
+    pub id: i32,
+    pub session_id: i32,
+    pub competency_id: i32,
+    pub ability_id: i32,
+    pub criterion_id: i32,
+    pub product_id: i32,
+    pub student_id: i32,
+    pub value: String,
+    pub updated_at: chrono::NaiveDateTime,
+    pub observation: Option<String>,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+pub struct MatrixResponse {
+    pub locked: bool,
+    pub competency: serde_json::Value,
+    pub abilities: Vec<serde_json::Value>,
+    pub criteria: Vec<serde_json::Value>,
+    pub products: Vec<serde_json::Value>,
+    pub students: Vec<serde_json::Value>,
+    pub values: Vec<serde_json::Value>,
+}
+
+#[derive(Serialize)]
+#[allow(dead_code)]
+pub struct BimesterWithGrades {
+    pub id: i32,
+    pub name: String,
+    pub grades: Vec<GradeWithSections>,
+}
+
+#[derive(Serialize)]
+#[allow(dead_code)]
+pub struct GradeWithSections {
+    pub id: i32,
+    pub bimester_id: i32,
+    pub number: i32,
+    pub sections: Vec<Section>,
 }

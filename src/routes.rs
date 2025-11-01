@@ -1711,9 +1711,8 @@ pub async fn list_bimesters_full(data: web::Data<AppState>) -> impl Responder {
 // ============================================
 
 use crate::models::{
-    RegisterAlumnoRequest, RegisterApoderadoRequest, RegisterDocenteRequest,
-    ApiResponse, UserResponse, ErrorResponse, User, TeacherProfile,
-    StudentProfile, GuardianProfile
+    ApiResponse, ErrorResponse, GuardianProfile, RegisterAlumnoRequest, RegisterApoderadoRequest,
+    RegisterDocenteRequest, StudentProfile, TeacherProfile, User, UserResponse,
 };
 
 /// POST /api/auth/register/alumno
@@ -1730,9 +1729,9 @@ pub async fn register_alumno(
         });
     }
 
-    // Verificar si el usuario ya existe
+    // Verificar si ya existe
     let exists = sqlx::query_scalar::<_, Option<i32>>(
-        "SELECT 1 FROM users WHERE firebase_uid = $1 OR email = $2"
+        "SELECT 1 FROM users WHERE firebase_uid = $1 OR email = $2",
     )
     .bind(&body.firebase_uid)
     .bind(&body.email)
@@ -1746,7 +1745,6 @@ pub async fn register_alumno(
         });
     }
 
-    // Iniciar transacción
     let mut tx = match data.pool.begin().await {
         Ok(t) => t,
         Err(e) => {
@@ -1758,20 +1756,23 @@ pub async fn register_alumno(
         }
     };
 
-    // 1. Crear usuario
+    // 1. Crear usuario con ENUM
     let user = match sqlx::query_as::<_, User>(
         r#"
         INSERT INTO users (firebase_uid, email, role, status)
-        VALUES ($1, $2, 'ALUMNO', 'ACTIVE')
+        VALUES ($1, $2, $3, $4)
         RETURNING id, firebase_uid, email, role, status, 
                   created_at, updated_at, last_login, 
                   profile_photo_url, phone
-        "#
+        "#,
     )
     .bind(&body.firebase_uid)
     .bind(&body.email)
+    .bind(UserRole::Alumno) // ✅ ENUM
+    .bind(UserStatus::Active) // ✅ ENUM
     .fetch_one(&mut *tx)
-    .await {
+    .await
+    {
         Ok(u) => u,
         Err(e) => {
             let _ = tx.rollback().await;
@@ -1790,13 +1791,14 @@ pub async fn register_alumno(
         VALUES ($1, $2, $3, CURRENT_DATE)
         RETURNING user_id, dni, full_name, date_of_birth, gender, 
                   address, enrollment_code, enrollment_date
-        "#
+        "#,
     )
     .bind(user.id)
     .bind(&body.dni)
     .bind(&body.full_name)
     .fetch_one(&mut *tx)
-    .await {
+    .await
+    {
         Ok(p) => p,
         Err(e) => {
             let _ = tx.rollback().await;
@@ -1808,7 +1810,6 @@ pub async fn register_alumno(
         }
     };
 
-    // Commit
     if let Err(e) = tx.commit().await {
         eprintln!("Error confirmando transacción: {:?}", e);
         return HttpResponse::InternalServerError().json(ErrorResponse {
@@ -1823,8 +1824,8 @@ pub async fn register_alumno(
         data: Some(UserResponse {
             id: user.id,
             email: user.email.clone(),
-            role: user.role.clone(),
-            status: user.status.clone(),
+            role: user.role.to_string(),
+            status: user.status.to_string(),
             profile_data: serde_json::json!({
                 "dni": student_profile.dni,
                 "full_name": student_profile.full_name,
@@ -1850,7 +1851,7 @@ pub async fn register_apoderado(
 
     // Verificar si ya existe
     let exists = sqlx::query_scalar::<_, Option<i32>>(
-        "SELECT 1 FROM users WHERE firebase_uid = $1 OR email = $2"
+        "SELECT 1 FROM users WHERE firebase_uid = $1 OR email = $2",
     )
     .bind(&body.firebase_uid)
     .bind(&body.email)
@@ -1878,17 +1879,20 @@ pub async fn register_apoderado(
     let user = match sqlx::query_as::<_, User>(
         r#"
         INSERT INTO users (firebase_uid, email, role, status, phone)
-        VALUES ($1, $2, 'APODERADO', 'ACTIVE', $3)
+        VALUES ($1, $2, $3, $4, $5)
         RETURNING id, firebase_uid, email, role, status, 
                   created_at, updated_at, last_login, 
                   profile_photo_url, phone
-        "#
+        "#,
     )
     .bind(&body.firebase_uid)
     .bind(&body.email)
+    .bind(UserRole::Apoderado)
+    .bind(UserStatus::Active)
     .bind(Some(&body.phone))
     .fetch_one(&mut *tx)
-    .await {
+    .await
+    {
         Ok(u) => u,
         Err(e) => {
             let _ = tx.rollback().await;
@@ -1908,7 +1912,7 @@ pub async fn register_apoderado(
         VALUES ($1, $2, $3, $4, $5, $6, $7)
         RETURNING user_id, full_name, dni, relationship_type, 
                   occupation, workplace, emergency_phone
-        "#
+        "#,
     )
     .bind(user.id)
     .bind(&body.full_name)
@@ -1918,7 +1922,8 @@ pub async fn register_apoderado(
     .bind(body.workplace.as_ref())
     .bind(Some(&body.phone))
     .fetch_one(&mut *tx)
-    .await {
+    .await
+    {
         Ok(p) => p,
         Err(e) => {
             let _ = tx.rollback().await;
@@ -1943,8 +1948,8 @@ pub async fn register_apoderado(
         data: Some(UserResponse {
             id: user.id,
             email: user.email.clone(),
-            role: user.role.clone(),
-            status: user.status.clone(),
+            role: user.role.to_string(),
+            status: user.status.to_string(),
             profile_data: serde_json::json!({
                 "dni": guardian_profile.dni,
                 "full_name": guardian_profile.full_name,
@@ -1971,7 +1976,7 @@ pub async fn register_docente(
 
     // Verificar si ya existe
     let exists = sqlx::query_scalar::<_, Option<i32>>(
-        "SELECT 1 FROM users WHERE firebase_uid = $1 OR email = $2"
+        "SELECT 1 FROM users WHERE firebase_uid = $1 OR email = $2",
     )
     .bind(&body.firebase_uid)
     .bind(&body.email)
@@ -1985,24 +1990,28 @@ pub async fn register_docente(
         });
     }
 
-    // ✅ FIX: Buscar área (primero por ID, luego por nombre)
+    // Verificar área
     let area_id = if let Some(id) = body.area_id {
-        // Verificar que el ID exista
-        match sqlx::query_scalar::<_, i32>(
-            "SELECT id FROM areas WHERE id = $1"
-        )
-        .bind(id)
-        .fetch_optional(&data.pool)
-        .await {
-            Ok(Some(area_id)) => area_id,
+        println!("✅ Usando area_id proporcionado: {}", id);
+
+        match sqlx::query_scalar::<_, i32>("SELECT id FROM areas WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&data.pool)
+            .await
+        {
+            Ok(Some(area_id)) => {
+                println!("✅ Área verificada con ID: {}", area_id);
+                area_id
+            }
             Ok(None) => {
+                println!("❌ Área no encontrada con ID: {}", id);
                 return HttpResponse::BadRequest().json(ErrorResponse {
                     error: "Área no encontrada".to_string(),
                     details: Some(format!("No existe área con ID: {}", id)),
                 });
             }
             Err(e) => {
-                eprintln!("Error verificando área por ID: {:?}", e);
+                eprintln!("❌ Error verificando área por ID: {:?}", e);
                 return HttpResponse::InternalServerError().json(ErrorResponse {
                     error: "Error verificando área".to_string(),
                     details: Some(e.to_string()),
@@ -2010,23 +2019,34 @@ pub async fn register_docente(
             }
         }
     } else {
-        // ✅ FIX: Buscar por nombre (usar 'nombre' en lugar de 'name')
+        println!(
+            "⚠️ No se proporcionó area_id, buscando por nombre: '{}'",
+            body.area_name
+        );
+
         match sqlx::query_scalar::<_, i32>(
-            "SELECT id FROM areas WHERE nombre = $1"
+            "SELECT id FROM areas WHERE LOWER(TRIM(nombre)) = LOWER(TRIM($1))",
         )
         .bind(&body.area_name)
         .fetch_optional(&data.pool)
-        .await {
-            Ok(Some(id)) => id,
+        .await
+        {
+            Ok(Some(id)) => {
+                println!(
+                    "✅ Área encontrada por nombre: '{}' → ID: {}",
+                    body.area_name, id
+                );
+                id
+            }
             Ok(None) => {
-                eprintln!("❌ Área no encontrada: '{}'", body.area_name);
+                eprintln!("❌ Área no encontrada con nombre: '{}'", body.area_name);
                 return HttpResponse::BadRequest().json(ErrorResponse {
                     error: "Área no encontrada".to_string(),
                     details: Some(format!("No existe el área: '{}'", body.area_name)),
                 });
             }
             Err(e) => {
-                eprintln!("Error buscando área por nombre: {:?}", e);
+                eprintln!("❌ Error buscando área por nombre: {:?}", e);
                 return HttpResponse::InternalServerError().json(ErrorResponse {
                     error: "Error buscando área".to_string(),
                     details: Some(e.to_string()),
@@ -2035,12 +2055,12 @@ pub async fn register_docente(
         }
     };
 
-    println!("✅ Área encontrada con ID: {}", area_id);
+    println!("✅ Área final seleccionada - ID: {}", area_id);
 
     let mut tx = match data.pool.begin().await {
         Ok(t) => t,
         Err(e) => {
-            eprintln!("Error iniciando transacción: {:?}", e);
+            eprintln!("❌ Error iniciando transacción: {:?}", e);
             return HttpResponse::InternalServerError().json(ErrorResponse {
                 error: "Error de base de datos".to_string(),
                 details: Some(e.to_string()),
@@ -2048,24 +2068,27 @@ pub async fn register_docente(
         }
     };
 
-    // 1. Crear usuario
+    // ✅ Insertar con ENUM directamente
     let user = match sqlx::query_as::<_, User>(
         r#"
         INSERT INTO users (firebase_uid, email, role, status)
-        VALUES ($1, $2, 'DOCENTE', 'ACTIVE')
+        VALUES ($1, $2, $3, $4)
         RETURNING id, firebase_uid, email, role, status, 
                   created_at, updated_at, last_login, 
                   profile_photo_url, phone
-        "#
+        "#,
     )
     .bind(&body.firebase_uid)
     .bind(&body.email)
+    .bind(UserRole::Docente) // ✅ Usar el ENUM
+    .bind(UserStatus::Active) // ✅ Usar el ENUM
     .fetch_one(&mut *tx)
-    .await {
+    .await
+    {
         Ok(u) => {
-            println!("✅ Usuario creado con ID: {}", u.id);
+            println!("✅ Usuario creado con ID: {} (email: {})", u.id, u.email);
             u
-        },
+        }
         Err(e) => {
             let _ = tx.rollback().await;
             eprintln!("❌ Error creando usuario: {:?}", e);
@@ -2083,7 +2106,7 @@ pub async fn register_docente(
         (user_id, area_id, full_name, employee_code, specialization, hire_date)
         VALUES ($1, $2, $3, $4, $5, CURRENT_DATE)
         RETURNING user_id, area_id, full_name, specialization, hire_date, employee_code
-        "#
+        "#,
     )
     .bind(user.id)
     .bind(Some(area_id))
@@ -2091,11 +2114,16 @@ pub async fn register_docente(
     .bind(body.employee_code.as_ref())
     .bind(body.specialization.as_ref())
     .fetch_one(&mut *tx)
-    .await {
+    .await
+    {
         Ok(p) => {
-            println!("✅ Perfil de docente creado para user_id: {}", p.user_id);
+            println!(
+                "✅ Perfil de docente creado - user_id: {}, area_id: {}",
+                p.user_id,
+                p.area_id.unwrap_or(0)
+            );
             p
-        },
+        }
         Err(e) => {
             let _ = tx.rollback().await;
             eprintln!("❌ Error creando perfil de docente: {:?}", e);
@@ -2114,7 +2142,10 @@ pub async fn register_docente(
         });
     }
 
-    println!("✅ Docente registrado exitosamente: {}", body.email);
+    println!(
+        "🎉 Docente registrado exitosamente: {} (DNI: {}, Área ID: {})",
+        body.email, body.dni, area_id
+    );
 
     HttpResponse::Created().json(ApiResponse {
         success: true,
@@ -2122,8 +2153,8 @@ pub async fn register_docente(
         data: Some(UserResponse {
             id: user.id,
             email: user.email.clone(),
-            role: user.role.clone(),
-            status: user.status.clone(),
+            role: user.role.to_string(),
+            status: user.status.to_string(),
             profile_data: serde_json::json!({
                 "full_name": teacher_profile.full_name,
                 "area_id": teacher_profile.area_id,
@@ -2136,10 +2167,7 @@ pub async fn register_docente(
 
 /// GET /api/auth/me - Obtener usuario actual
 #[get("/api/auth/me")]
-pub async fn get_current_user(
-    data: web::Data<AppState>,
-    req: HttpRequest,
-) -> impl Responder {
+pub async fn get_current_user(data: web::Data<AppState>, req: HttpRequest) -> impl Responder {
     // Obtener firebase_uid del header
     let firebase_uid = match req.headers().get("X-Firebase-UID") {
         Some(header) => match header.to_str() {
@@ -2167,15 +2195,16 @@ pub async fn get_current_user(
                profile_photo_url, phone
         FROM users 
         WHERE firebase_uid = $1
-        "#
+        "#,
     )
     .bind(&firebase_uid)
     .fetch_optional(&data.pool)
-    .await {
+    .await
+    {
         Ok(Some(user)) => {
-            // Obtener perfil según rol
-            let profile_data = match user.role.as_str() {
-                "ALUMNO" => {
+            // Obtener perfil según rol (usando el ENUM)
+            let profile_data = match user.role {
+                UserRole::Alumno => {
                     sqlx::query_as::<_, StudentProfile>(
                         "SELECT user_id, dni, full_name, date_of_birth, gender, address, enrollment_code, enrollment_date FROM student_profiles WHERE user_id = $1"
                     )
@@ -2187,7 +2216,7 @@ pub async fn get_current_user(
                     .map(|p| serde_json::to_value(p).unwrap_or(serde_json::json!({})))
                     .unwrap_or(serde_json::json!({}))
                 }
-                "APODERADO" => {
+                UserRole::Apoderado => {
                     sqlx::query_as::<_, GuardianProfile>(
                         "SELECT user_id, full_name, dni, relationship_type, occupation, workplace, emergency_phone FROM guardian_profiles WHERE user_id = $1"
                     )
@@ -2199,7 +2228,7 @@ pub async fn get_current_user(
                     .map(|p| serde_json::to_value(p).unwrap_or(serde_json::json!({})))
                     .unwrap_or(serde_json::json!({}))
                 }
-                "DOCENTE" => {
+                UserRole::Docente => {
                     sqlx::query_as::<_, TeacherProfile>(
                         "SELECT user_id, area_id, full_name, specialization, hire_date, employee_code FROM teacher_profiles WHERE user_id = $1"
                     )
@@ -2211,7 +2240,7 @@ pub async fn get_current_user(
                     .map(|p| serde_json::to_value(p).unwrap_or(serde_json::json!({})))
                     .unwrap_or(serde_json::json!({}))
                 }
-                _ => serde_json::json!({})
+                UserRole::Admin => serde_json::json!({})
             };
 
             HttpResponse::Ok().json(ApiResponse {
@@ -2220,18 +2249,16 @@ pub async fn get_current_user(
                 data: Some(UserResponse {
                     id: user.id,
                     email: user.email.clone(),
-                    role: user.role.clone(),
-                    status: user.status.clone(),
+                    role: user.role.to_string(),
+                    status: user.status.to_string(),
                     profile_data,
                 }),
             })
         }
-        Ok(None) => {
-            HttpResponse::NotFound().json(ErrorResponse {
-                error: "Usuario no encontrado".to_string(),
-                details: None,
-            })
-        }
+        Ok(None) => HttpResponse::NotFound().json(ErrorResponse {
+            error: "Usuario no encontrado".to_string(),
+            details: None,
+        }),
         Err(e) => {
             eprintln!("Error buscando usuario: {:?}", e);
             HttpResponse::InternalServerError().json(ErrorResponse {
