@@ -2269,6 +2269,317 @@ pub async fn get_current_user(data: web::Data<AppState>, req: HttpRequest) -> im
     }
 }
 
+#[get("/students/{user_id}/grades")]
+pub async fn get_student_grades(path: web::Path<i32>, data: web::Data<AppState>) -> impl Responder {
+    let user_id = path.into_inner();
+
+    let rows = sqlx::query(
+        r#"
+        SELECT 
+            s.full_name,
+            sec.letter,
+            g.number AS grade_number,
+            b.name AS bimester_name,
+            sess.title AS session_title,
+            comp.name AS competency_name,
+            ei.value::text AS value,
+            ei.observation,
+            ei.updated_at
+        FROM evaluation_items ei
+        JOIN students s ON s.id = ei.student_id
+        JOIN sessions sess ON sess.id = ei.session_id
+        JOIN sections sec ON sec.id = sess.section_id
+        JOIN grades g ON g.id = sec.grade_id
+        JOIN bimesters b ON b.id = g.bimester_id
+        JOIN competencies comp ON comp.id = ei.competency_id
+        WHERE s.user_id = $1
+        ORDER BY b.id, sess.number, comp.number
+        "#,
+    )
+    .bind(user_id)
+    .fetch_all(&data.pool)
+    .await;
+
+    match rows {
+        Ok(data) => {
+            let grades: Vec<StudentGradeItem> = data
+                .into_iter()
+                .map(|row| StudentGradeItem {
+                    full_name: row.try_get("full_name").unwrap(),
+                    section_letter: row.try_get("letter").unwrap(),
+                    grade_number: row.try_get("grade_number").unwrap(),
+                    bimester_name: row.try_get("bimester_name").unwrap(),
+                    session_title: row.try_get("session_title").unwrap(),
+                    competency_name: row.try_get("competency_name").unwrap(),
+                    value: row.try_get("value").unwrap(),
+                    observation: row.try_get("observation").unwrap(),
+                    updated_at: row.try_get("updated_at").unwrap(),
+                })
+                .collect();
+
+            HttpResponse::Ok().json(grades)
+        }
+        Err(e) => {
+            eprintln!("Error fetching grades: {:?}", e);
+            HttpResponse::InternalServerError().body("Error al obtener notas")
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub struct LinkStudentIn {
+    pub student_id: i32,
+    pub user_id: i32,
+}
+
+#[post("/admin/link-student")]
+pub async fn link_student_to_user(
+    data: web::Data<AppState>,
+    body: web::Json<LinkStudentIn>,
+) -> impl Responder {
+    let res = sqlx::query("UPDATE students SET user_id = $1 WHERE id = $2 RETURNING id")
+        .bind(body.user_id)
+        .bind(body.student_id)
+        .fetch_one(&data.pool)
+        .await;
+
+    match res {
+        Ok(_) => HttpResponse::Ok().json(serde_json::json!({
+            "success": true,
+            "message": "Alumno vinculado exitosamente"
+        })),
+        Err(e) => {
+            eprintln!("Error linking student: {:?}", e);
+            HttpResponse::InternalServerError().body("Error al vincular")
+        }
+    }
+}
+
+#[get("/admin/unlinked-students")]
+pub async fn list_unlinked_students(data: web::Data<AppState>) -> impl Responder {
+    let rows = sqlx::query(
+        r#"
+        SELECT s.id, s.full_name, s.section_id, sec.letter, g.number AS grade_number, b.name AS bimester_name
+        FROM students s
+        JOIN sections sec ON sec.id = s.section_id
+        JOIN grades g ON g.id = sec.grade_id
+        JOIN bimesters b ON b.id = g.bimester_id
+        WHERE s.user_id IS NULL
+        ORDER BY b.year DESC, b.id DESC, g.number, sec.letter, s.full_name
+        "#
+    )
+    .fetch_all(&data.pool)
+    .await;
+
+    match rows {
+        Ok(data) => {
+            let unlinked: Vec<UnlinkedStudent> = data
+                .into_iter()
+                .map(|row| UnlinkedStudent {
+                    id: row.try_get("id").unwrap(),
+                    full_name: row.try_get("full_name").unwrap(),
+                    section_id: row.try_get("section_id").unwrap(),
+                    section_letter: row.try_get("letter").unwrap(),
+                    grade_number: row.try_get("grade_number").unwrap(),
+                    bimester_name: row.try_get("bimester_name").unwrap(),
+                })
+                .collect();
+
+            HttpResponse::Ok().json(unlinked)
+        }
+        Err(e) => {
+            eprintln!("Error fetching unlinked students: {:?}", e);
+            HttpResponse::InternalServerError().body("Error al obtener alumnos")
+        }
+    }
+}
+
+#[get("/students/{user_id}/profile")]
+pub async fn get_student_profile(
+    path: web::Path<i32>,
+    data: web::Data<AppState>,
+) -> impl Responder {
+    let user_id = path.into_inner();
+
+    // Obtener perfil
+    let profile = sqlx::query(
+        "SELECT user_id, dni, full_name, date_of_birth, gender, address, enrollment_code, enrollment_date 
+         FROM student_profiles WHERE user_id = $1"
+    )
+    .bind(user_id)
+    .fetch_optional(&data.pool)
+    .await;
+
+    let profile_data = match profile {
+        Ok(Some(row)) => serde_json::json!({
+            "user_id": row.try_get::<i32, _>("user_id").unwrap(),
+            "dni": row.try_get::<String, _>("dni").unwrap(),
+            "full_name": row.try_get::<String, _>("full_name").unwrap(),
+            "date_of_birth": row.try_get::<Option<chrono::NaiveDate>, _>("date_of_birth").unwrap(),
+            "gender": row.try_get::<Option<String>, _>("gender").unwrap(),
+            "address": row.try_get::<Option<String>, _>("address").unwrap(),
+            "enrollment_code": row.try_get::<Option<String>, _>("enrollment_code").unwrap(),
+            "enrollment_date": row.try_get::<Option<chrono::NaiveDate>, _>("enrollment_date").unwrap(),
+        }),
+        Ok(None) => {
+            return HttpResponse::NotFound().body("Perfil no encontrado");
+        }
+        Err(e) => {
+            eprintln!("Error fetching profile: {:?}", e);
+            return HttpResponse::InternalServerError().body("Error al obtener perfil");
+        }
+    };
+
+    // Obtener secciones donde está matriculado
+    let sections = sqlx::query(
+        r#"
+        SELECT s.id, sec.letter, g.number AS grade_number, b.name AS bimester_name, b.year
+        FROM students s
+        JOIN sections sec ON sec.id = s.section_id
+        JOIN grades g ON g.id = sec.grade_id
+        JOIN bimesters b ON b.id = g.bimester_id
+        WHERE s.user_id = $1
+        ORDER BY b.year DESC, b.id DESC
+        "#,
+    )
+    .bind(user_id)
+    .fetch_all(&data.pool)
+    .await;
+
+    let sections_data = match sections {
+        Ok(rows) => rows
+            .into_iter()
+            .map(|row| {
+                serde_json::json!({
+                    "id": row.try_get::<i32, _>("id").unwrap(),
+                    "letter": row.try_get::<String, _>("letter").unwrap(),
+                    "grade_number": row.try_get::<i32, _>("grade_number").unwrap(),
+                    "bimester_name": row.try_get::<String, _>("bimester_name").unwrap(),
+                    "year": row.try_get::<i32, _>("year").unwrap(),
+                })
+            })
+            .collect::<Vec<_>>(),
+        Err(e) => {
+            eprintln!("Error fetching sections: {:?}", e);
+            return HttpResponse::InternalServerError().body("Error al obtener secciones");
+        }
+    };
+
+    HttpResponse::Ok().json(serde_json::json!({
+        "profile": profile_data,
+        "sections": sections_data
+    }))
+}
+
+#[get("/students/{user_id}/enrollments")]
+pub async fn get_student_enrollments(
+    path: web::Path<i32>,
+    data: web::Data<AppState>,
+) -> impl Responder {
+    let user_id = path.into_inner();
+
+    let rows = sqlx::query(
+        r#"
+        SELECT 
+            s.id AS student_id,
+            s.full_name,
+            sec.letter,
+            g.number AS grade_number,
+            b.name AS bimester_name,
+            b.year
+        FROM students s
+        JOIN sections sec ON sec.id = s.section_id
+        JOIN grades g ON g.id = sec.grade_id
+        JOIN bimesters b ON b.id = g.bimester_id
+        WHERE s.user_id = $1
+        ORDER BY b.year DESC, b.id DESC, g.number, sec.letter
+        "#,
+    )
+    .bind(user_id)
+    .fetch_all(&data.pool)
+    .await;
+
+    match rows {
+        Ok(data) => {
+            let enrollments: Vec<LinkedStudent> = data
+                .into_iter()
+                .map(|row| LinkedStudent {
+                    student_id: row.try_get("student_id").unwrap(),
+                    full_name: row.try_get("full_name").unwrap(),
+                    section_letter: row.try_get("letter").unwrap(),
+                    grade_number: row.try_get("grade_number").unwrap(),
+                    bimester_name: row.try_get("bimester_name").unwrap(),
+                    year: row.try_get("year").unwrap(),
+                })
+                .collect();
+
+            HttpResponse::Ok().json(enrollments)
+        }
+        Err(e) => {
+            eprintln!("Error fetching enrollments: {:?}", e);
+            HttpResponse::InternalServerError().body("Error al obtener matrículas")
+        }
+    }
+}
+
+#[get("/admin/search-students")]
+pub async fn search_students(
+    query: web::Query<SearchStudentQuery>,
+    data: web::Data<AppState>,
+) -> impl Responder {
+    let search_term = format!("%{}%", query.name.to_lowercase());
+
+    let rows = sqlx::query(
+        r#"
+        SELECT 
+            s.id,
+            s.full_name,
+            s.section_id,
+            s.user_id,
+            sec.letter,
+            g.number AS grade_number,
+            b.name AS bimester_name,
+            b.year
+        FROM students s
+        JOIN sections sec ON sec.id = s.section_id
+        JOIN grades g ON g.id = sec.grade_id
+        JOIN bimesters b ON b.id = g.bimester_id
+        WHERE LOWER(s.full_name) LIKE $1
+        ORDER BY b.year DESC, b.id DESC, g.number, sec.letter, s.full_name
+        LIMIT 50
+        "#,
+    )
+    .bind(&search_term)
+    .fetch_all(&data.pool)
+    .await;
+
+    match rows {
+        Ok(data) => {
+            let results: Vec<_> = data
+                .into_iter()
+                .map(|row| {
+                    serde_json::json!({
+                        "id": row.try_get::<i32, _>("id").unwrap(),
+                        "full_name": row.try_get::<String, _>("full_name").unwrap(),
+                        "section_id": row.try_get::<i32, _>("section_id").unwrap(),
+                        "user_id": row.try_get::<Option<i32>, _>("user_id").unwrap(),
+                        "section_letter": row.try_get::<String, _>("letter").unwrap(),
+                        "grade_number": row.try_get::<i32, _>("grade_number").unwrap(),
+                        "bimester_name": row.try_get::<String, _>("bimester_name").unwrap(),
+                        "year": row.try_get::<i32, _>("year").unwrap(),
+                    })
+                })
+                .collect();
+
+            HttpResponse::Ok().json(results)
+        }
+        Err(e) => {
+            eprintln!("Error searching students: {:?}", e);
+            HttpResponse::InternalServerError().body("Error al buscar alumnos")
+        }
+    }
+}
+
 pub fn config(cfg: &mut web::ServiceConfig) {
     cfg.service(create_bimester)
         .service(list_bimesters)
@@ -2319,5 +2630,11 @@ pub fn config(cfg: &mut web::ServiceConfig) {
         .service(register_alumno)
         .service(register_apoderado)
         .service(register_docente)
-        .service(get_current_user);
+        .service(get_current_user)
+        .service(get_student_grades)
+        .service(get_student_profile)
+        .service(get_student_enrollments)
+        .service(link_student_to_user)
+        .service(list_unlinked_students)
+        .service(search_students);
 }

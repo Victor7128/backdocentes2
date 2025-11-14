@@ -200,6 +200,45 @@ pub struct Student {
     pub id: i32,
     pub section_id: i32,
     pub full_name: String,
+    pub user_id: Option<i32>,
+}
+
+#[derive(Serialize)]
+pub struct StudentGradeItem {
+    pub full_name: String,
+    pub section_letter: String,
+    pub grade_number: i32,
+    pub bimester_name: String,
+    pub session_title: Option<String>,
+    pub competency_name: Option<String>,
+    pub value: String,
+    pub observation: Option<String>,
+    pub updated_at: chrono::NaiveDateTime,
+}
+
+#[derive(Serialize)]
+pub struct UnlinkedStudent {
+    pub id: i32,
+    pub full_name: String,
+    pub section_id: i32,
+    pub section_letter: String,
+    pub grade_number: i32,
+    pub bimester_name: String,
+}
+
+#[derive(Serialize)]
+pub struct LinkedStudent {
+    pub student_id: i32,
+    pub full_name: String,
+    pub section_letter: String,
+    pub grade_number: i32,
+    pub bimester_name: String,
+    pub year: i32,
+}
+
+#[derive(Deserialize)]
+pub struct SearchStudentQuery {
+    pub name: String,
 }
 
 #[derive(Serialize, Deserialize, sqlx::FromRow)]
