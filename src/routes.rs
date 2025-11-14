@@ -17,7 +17,7 @@ pub async fn create_bimester(
 ) -> impl Responder {
     let name = body.get("name").and_then(|v| v.as_str()).unwrap_or("I");
     let rec = sqlx::query_as::<_, Bimester>(
-        "INSERT INTO sessions (section_id, number, date) VALUES ($1,$2,$3::date) RETURNING id, section_id, number, title, date",
+        "INSERT INTO bimesters (name) VALUES ($1) RETURNING id, name",
     )
     .bind(name)
     .fetch_one(&data.pool)
@@ -387,7 +387,7 @@ pub async fn import_students_csv(
 
         // Guardar exactamente como viene (sin invertir)
         let res = sqlx::query_as::<_, Student>(
-            "INSERT INTO students (section_id, full_name) VALUES ($1,$2) RETURNING id, section_id, full_name"
+            "INSERT INTO students (section_id, full_name) VALUES ($1,$2) RETURNING id, section_id, full_name, user_id"
         )
         .bind(sec_id)
         .bind(name)
@@ -476,7 +476,7 @@ pub async fn import_students_txt(
 
     for name in lines.iter() {
         let res = sqlx::query_as::<_, Student>(
-            "INSERT INTO students (section_id, full_name) VALUES ($1,$2) RETURNING id, section_id, full_name"
+            "INSERT INTO students (section_id, full_name) VALUES ($1,$2) RETURNING id, section_id, full_name, user_id"
         )
         .bind(sec_id)
         .bind(name)
