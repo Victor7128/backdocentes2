@@ -241,6 +241,12 @@ pub struct SearchStudentQuery {
     pub name: String,
 }
 
+#[derive(Deserialize)]
+pub struct LinkStudentIn {
+    pub student_id: i32,
+    pub user_id: i32,
+}
+
 #[derive(Serialize, Deserialize, sqlx::FromRow)]
 pub struct Session {
     pub id: i32,
