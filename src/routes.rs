@@ -2574,6 +2574,136 @@ pub async fn search_students(
     }
 }
 
+#[get("/admin/homonyms")]
+pub async fn detect_homonyms(data: web::Data<AppState>) -> impl Responder {
+    let rows =
+        sqlx::query("SELECT * FROM public.detect_student_homonyms() WHERE is_problematic = true")
+            .fetch_all(&data.pool)
+            .await;
+
+    match rows {
+        Ok(data) => {
+            let results: Vec<_> = data
+                .into_iter()
+                .map(|row| {
+                    serde_json::json!({
+                        "full_name": row.try_get::<String, _>("full_name").unwrap(),
+                        "count": row.try_get::<i64, _>("count").unwrap(),
+                        "student_ids": row.try_get::<Vec<i32>, _>("student_ids").unwrap(),
+                        "user_ids": row.try_get::<Vec<Option<i32>>, _>("user_ids").unwrap(),
+                        "is_problematic": row.try_get::<bool, _>("is_problematic").unwrap(),
+                    })
+                })
+                .collect();
+            HttpResponse::Ok().json(results)
+        }
+        Err(e) => {
+            eprintln!("Error detecting homonyms: {:?}", e);
+            HttpResponse::InternalServerError().body("Error al detectar homónimos")
+        }
+    }
+}
+
+/// POST /admin/unlink-student - Desvincular estudiante
+#[post("/admin/unlink-student")]
+pub async fn unlink_student(
+    data: web::Data<AppState>,
+    body: web::Json<UnlinkStudentIn>,
+) -> impl Responder {
+    let result = sqlx::query_scalar::<_, serde_json::Value>("SELECT public.unlink_student($1)")
+        .bind(body.student_id)
+        .fetch_one(&data.pool)
+        .await;
+
+    match result {
+        Ok(json_result) => HttpResponse::Ok().json(json_result),
+        Err(e) => {
+            eprintln!("Error unlinking student: {:?}", e);
+            HttpResponse::InternalServerError().body("Error al desvincular")
+        }
+    }
+}
+
+/// POST /admin/link-student-by-dni - Vincular por DNI
+#[post("/admin/link-student-by-dni")]
+pub async fn link_student_by_dni(
+    data: web::Data<AppState>,
+    body: web::Json<LinkByDniIn>,
+) -> impl Responder {
+    if body.dni.len() != 8 || !body.dni.chars().all(|c| c.is_numeric()) {
+        return HttpResponse::BadRequest().json(serde_json::json!({
+            "success": false,
+            "message": "DNI inválido. Debe tener 8 dígitos"
+        }));
+    }
+
+    let result =
+        sqlx::query_scalar::<_, serde_json::Value>("SELECT public.link_student_by_dni($1, $2)")
+            .bind(body.student_id)
+            .bind(&body.dni)
+            .fetch_one(&data.pool)
+            .await;
+
+    match result {
+        Ok(json_result) => HttpResponse::Ok().json(json_result),
+        Err(e) => {
+            eprintln!("Error linking by DNI: {:?}", e);
+            HttpResponse::InternalServerError().body("Error al vincular por DNI")
+        }
+    }
+}
+
+/// GET /admin/linking-status - Estado de vinculaciones
+#[get("/admin/linking-status")]
+pub async fn get_linking_status(data: web::Data<AppState>) -> impl Responder {
+    let rows = sqlx::query(
+        "SELECT * FROM public.student_linking_status ORDER BY bimester_year DESC, grade_number, section_letter, student_name"
+    )
+    .fetch_all(&data.pool)
+    .await;
+
+    match rows {
+        Ok(data) => {
+            let results: Vec<_> = data.into_iter().map(|row| {
+                serde_json::json!({
+                    "student_id": row.try_get::<i32, _>("student_id").unwrap(),
+                    "student_name": row.try_get::<String, _>("student_name").unwrap(),
+                    "student_dni": row.try_get::<Option<String>, _>("student_dni").unwrap(),
+                    "user_id": row.try_get::<Option<i32>, _>("user_id").unwrap(),
+                    "section_letter": row.try_get::<String, _>("section_letter").unwrap(),
+                    "grade_number": row.try_get::<i32, _>("grade_number").unwrap(),
+                    "bimester_name": row.try_get::<String, _>("bimester_name").unwrap(),
+                    "profile_dni": row.try_get::<Option<String>, _>("profile_dni").unwrap(),
+                    "link_status": row.try_get::<String, _>("link_status").unwrap(),
+                    "linked_by_method": row.try_get::<Option<String>, _>("linked_by_method").unwrap(),
+                    "issue": row.try_get::<Option<String>, _>("issue").unwrap(),
+                })
+            }).collect();
+            HttpResponse::Ok().json(results)
+        }
+        Err(e) => {
+            eprintln!("Error fetching linking status: {:?}", e);
+            HttpResponse::InternalServerError().body("Error al obtener estado")
+        }
+    }
+}
+
+/// POST /admin/backfill-dni - Ejecutar backfill de DNIs
+#[post("/admin/backfill-dni")]
+pub async fn backfill_dni(data: web::Data<AppState>) -> impl Responder {
+    let result = sqlx::query_scalar::<_, serde_json::Value>("SELECT public.backfill_student_dni()")
+        .fetch_one(&data.pool)
+        .await;
+
+    match result {
+        Ok(json_result) => HttpResponse::Ok().json(json_result),
+        Err(e) => {
+            eprintln!("Error in backfill: {:?}", e);
+            HttpResponse::InternalServerError().body("Error en backfill")
+        }
+    }
+}
+
 pub fn config(cfg: &mut web::ServiceConfig) {
     cfg.service(create_bimester)
         .service(list_bimesters)
@@ -2630,5 +2760,10 @@ pub fn config(cfg: &mut web::ServiceConfig) {
         .service(get_student_enrollments)
         .service(link_student_to_user)
         .service(list_unlinked_students)
-        .service(search_students);
+        .service(search_students)
+        .service(detect_homonyms)
+        .service(unlink_student)
+        .service(link_student_by_dni)
+        .service(get_linking_status)
+        .service(backfill_dni);
 }

@@ -247,6 +247,17 @@ pub struct LinkStudentIn {
     pub user_id: i32,
 }
 
+#[derive(Deserialize)]
+pub struct LinkByDniIn {
+    pub student_id: i32,
+    pub dni: String,
+}
+
+#[derive(Deserialize)]
+pub struct UnlinkStudentIn {
+    pub student_id: i32,
+}
+
 #[derive(Serialize, Deserialize, sqlx::FromRow)]
 pub struct Session {
     pub id: i32,
