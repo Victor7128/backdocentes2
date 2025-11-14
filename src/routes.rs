@@ -222,7 +222,7 @@ pub async fn create_student(
 ) -> impl Responder {
     let sec_id = path.into_inner();
     let rec = sqlx::query_as::<_, Student>(
-        "INSERT INTO students (section_id, full_name) VALUES ($1,$2) RETURNING id, section_id, full_name, user_id"
+        "INSERT INTO students (section_id, full_name) VALUES ($1,$2) RETURNING id, section_id, full_name, user_id, dni"
     )
     .bind(sec_id)
     .bind(&body.full_name)
@@ -236,7 +236,7 @@ pub async fn create_student(
 pub async fn list_students(path: web::Path<i32>, data: web::Data<AppState>) -> impl Responder {
     let sec_id = path.into_inner();
     let rows = sqlx::query_as::<_, Student>(
-        "SELECT id, section_id, full_name, user_id FROM students WHERE section_id=$1 ORDER BY full_name",
+        "SELECT id, section_id, full_name, user_id, dni FROM students WHERE section_id=$1 ORDER BY full_name",
     )
     .bind(sec_id)
     .fetch_all(&data.pool)
@@ -253,7 +253,7 @@ pub async fn update_student(
 ) -> impl Responder {
     let id = path.into_inner();
     let rec = sqlx::query_as::<_, Student>(
-        "UPDATE students SET full_name=$1 WHERE id=$2 RETURNING id, section_id, full_name, user_id",
+        "UPDATE students SET full_name=$1 WHERE id=$2 RETURNING id, section_id, full_name, user_id, dni",
     )
     .bind(&body.full_name)
     .bind(id)
@@ -300,7 +300,7 @@ pub async fn import_students_json(
             continue;
         }
         let res = sqlx::query_as::<_, Student>(
-            "INSERT INTO students (section_id, full_name) VALUES ($1,$2) RETURNING id, section_id, full_name, user_id"
+            "INSERT INTO students (section_id, full_name) VALUES ($1,$2) RETURNING id, section_id, full_name, user_id, dni",
         )
         .bind(sec_id)
         .bind(name)
@@ -387,7 +387,7 @@ pub async fn import_students_csv(
 
         // Guardar exactamente como viene (sin invertir)
         let res = sqlx::query_as::<_, Student>(
-            "INSERT INTO students (section_id, full_name) VALUES ($1,$2) RETURNING id, section_id, full_name, user_id"
+            "INSERT INTO students (section_id, full_name) VALUES ($1,$2) RETURNING id, section_id, full_name, user_id, dni",
         )
         .bind(sec_id)
         .bind(name)
@@ -476,7 +476,7 @@ pub async fn import_students_txt(
 
     for name in lines.iter() {
         let res = sqlx::query_as::<_, Student>(
-            "INSERT INTO students (section_id, full_name) VALUES ($1,$2) RETURNING id, section_id, full_name, user_id"
+            "INSERT INTO students (section_id, full_name) VALUES ($1,$2) RETURNING id, section_id, full_name, user_id, dni",
         )
         .bind(sec_id)
         .bind(name)

@@ -201,6 +201,7 @@ pub struct Student {
     pub section_id: i32,
     pub full_name: String,
     pub user_id: Option<i32>,
+    pub dni: Option<String>,
 }
 
 #[derive(Serialize)]
