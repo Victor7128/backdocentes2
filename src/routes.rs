@@ -4,6 +4,7 @@ use serde::Deserialize;
 use serde_json::json;
 use sqlx::PgPool;
 use sqlx::Row;
+use tracing;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -1768,8 +1769,8 @@ pub async fn register_alumno(
     )
     .bind(&body.firebase_uid)
     .bind(&body.email)
-    .bind(UserRole::Alumno) // ✅ ENUM
-    .bind(UserStatus::Active) // ✅ ENUM
+    .bind(UserRole::Alumno)
+    .bind(UserStatus::Active)
     .fetch_one(&mut *tx)
     .await
     {
@@ -1810,6 +1811,31 @@ pub async fn register_alumno(
         }
     };
 
+    // ✅ 3. NUEVO: Intentar vincular automáticamente por nombre
+    let linked_student_id =
+        match try_link_student_by_name(&data.pool, user.id, &body.full_name, &body.dni).await {
+            Ok(Some(student_id)) => {
+                tracing::info!(
+                    "✅ Vinculación automática exitosa: user_id={}, student_id={}",
+                    user.id,
+                    student_id
+                );
+                Some(student_id)
+            }
+            Ok(None) => {
+                tracing::warn!(
+                    "⚠️ No se pudo vincular automáticamente al alumno: {}",
+                    body.full_name
+                );
+                None
+            }
+            Err(e) => {
+                tracing::error!("❌ Error en vinculación automática: {:?}", e);
+                // No hacer rollback, solo loguear el error
+                None
+            }
+        };
+
     if let Err(e) = tx.commit().await {
         eprintln!("Error confirmando transacción: {:?}", e);
         return HttpResponse::InternalServerError().json(ErrorResponse {
@@ -1818,19 +1844,33 @@ pub async fn register_alumno(
         });
     }
 
+    // Preparar respuesta con información de vinculación
+    let mut profile_data = serde_json::json!({
+        "dni": student_profile.dni,
+        "full_name": student_profile.full_name,
+        "enrollment_date": student_profile.enrollment_date,
+    });
+
+    if let Some(student_id) = linked_student_id {
+        profile_data["linked_student_id"] = serde_json::json!(student_id);
+        profile_data["auto_linked"] = serde_json::json!(true);
+    } else {
+        profile_data["auto_linked"] = serde_json::json!(false);
+    }
+
     HttpResponse::Created().json(ApiResponse {
         success: true,
-        message: "Alumno registrado exitosamente".to_string(),
+        message: if linked_student_id.is_some() {
+            "Alumno registrado y vinculado automáticamente".to_string()
+        } else {
+            "Alumno registrado exitosamente".to_string()
+        },
         data: Some(UserResponse {
             id: user.id,
             email: user.email.clone(),
             role: user.role.to_string(),
             status: user.status.to_string(),
-            profile_data: serde_json::json!({
-                "dni": student_profile.dni,
-                "full_name": student_profile.full_name,
-                "enrollment_date": student_profile.enrollment_date,
-            }),
+            profile_data,
         }),
     })
 }
@@ -2701,6 +2741,85 @@ pub async fn backfill_dni(data: web::Data<AppState>) -> impl Responder {
             eprintln!("Error in backfill: {:?}", e);
             HttpResponse::InternalServerError().body("Error en backfill")
         }
+    }
+}
+
+fn normalize_name(name: &str) -> String {
+    name.to_uppercase()
+        .replace(",", "")
+        .split_whitespace()
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Intenta vincular automáticamente un estudiante por similitud de nombre
+async fn try_link_student_by_name(
+    pool: &PgPool,
+    user_id: i32,
+    full_name: &str,
+    dni: &str,
+) -> Result<Option<i32>, sqlx::Error> {
+    let normalized_name = normalize_name(full_name);
+
+    tracing::info!(
+        "🔍 Buscando estudiante con nombre similar a: '{}' (normalizado: '{}')",
+        full_name,
+        normalized_name
+    );
+
+    // Buscar estudiante con nombre normalizado similar y sin vincular
+    let student = sqlx::query(
+        r#"
+        SELECT id, full_name, section_id
+        FROM students
+        WHERE user_id IS NULL
+          AND UPPER(REPLACE(REPLACE(full_name, ',', ''), '  ', ' ')) = $1
+        LIMIT 1
+        "#,
+    )
+    .bind(&normalized_name)
+    .fetch_optional(pool)
+    .await?;
+
+    if let Some(student) = student {
+        let student_id: i32 = student.try_get("id")?;
+        let student_full_name: String = student.try_get("full_name")?;
+
+        tracing::info!(
+            "✅ Encontrado estudiante ID {} con nombre: '{}'",
+            student_id,
+            student_full_name
+        );
+
+        // ✅ CORREGIDO: Ejecutar el UPDATE
+        sqlx::query(
+            r#"
+            UPDATE students
+            SET user_id = $1, dni = $2
+            WHERE id = $3
+            "#,
+        )
+        .bind(user_id)
+        .bind(dni)
+        .bind(student_id)
+        .execute(pool) // ✅ AGREGADO: .execute()
+        .await?; // ✅ AGREGADO: .await?
+
+        tracing::info!(
+            "✅ Estudiante {} vinculado exitosamente: user_id={}, dni={}",
+            student_full_name,
+            user_id,
+            dni
+        );
+
+        Ok(Some(student_id)) // ✅ CORREGIDO: sin punto y coma
+    } else {
+        tracing::warn!(
+            "⚠️ No se encontró estudiante sin vincular con nombre: '{}'",
+            full_name
+        );
+        Ok(None) // ✅ CORREGIDO: sin punto y coma
     }
 }
 
