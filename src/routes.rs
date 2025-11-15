@@ -1811,7 +1811,16 @@ pub async fn register_alumno(
         }
     };
 
-    // ✅ 3. NUEVO: Intentar vincular automáticamente por nombre
+    // ✅ 3. COMMIT ANTES de intentar vincular
+    if let Err(e) = tx.commit().await {
+        eprintln!("Error confirmando transacción: {:?}", e);
+        return HttpResponse::InternalServerError().json(ErrorResponse {
+            error: "Error confirmando registro".to_string(),
+            details: Some(e.to_string()),
+        });
+    }
+
+    // ✅ 4. AHORA SÍ: Intentar vincular automáticamente DESPUÉS del COMMIT
     let linked_student_id =
         match try_link_student_by_name(&data.pool, user.id, &body.full_name, &body.dni).await {
             Ok(Some(student_id)) => {
@@ -1831,18 +1840,10 @@ pub async fn register_alumno(
             }
             Err(e) => {
                 tracing::error!("❌ Error en vinculación automática: {:?}", e);
-                // No hacer rollback, solo loguear el error
+                // No hacer rollback, el usuario ya fue creado exitosamente
                 None
             }
         };
-
-    if let Err(e) = tx.commit().await {
-        eprintln!("Error confirmando transacción: {:?}", e);
-        return HttpResponse::InternalServerError().json(ErrorResponse {
-            error: "Error confirmando registro".to_string(),
-            details: Some(e.to_string()),
-        });
-    }
 
     // Preparar respuesta con información de vinculación
     let mut profile_data = serde_json::json!({
