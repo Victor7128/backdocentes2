@@ -2768,17 +2768,27 @@ async fn try_link_student_by_name(
         normalized_name
     );
 
-    // Buscar estudiante con nombre normalizado similar y sin vincular
+    // ✅ CORRECCIÓN: Usar REGEXP_REPLACE y comparar nombres normalizados
     let student = sqlx::query(
         r#"
         SELECT id, full_name, section_id
         FROM students
         WHERE user_id IS NULL
-          AND UPPER(REPLACE(REPLACE(full_name, ',', ''), '  ', ' ')) = $1
+          AND UPPER(
+              REGEXP_REPLACE(
+                  REPLACE(full_name, ',', ''),
+                  '\s+', ' ', 'g'
+              )
+          ) = UPPER(
+              REGEXP_REPLACE(
+                  REPLACE($1, ',', ''),
+                  '\s+', ' ', 'g'
+              )
+          )
         LIMIT 1
         "#,
     )
-    .bind(&normalized_name)
+    .bind(full_name)  // ✅ CORRECCIÓN: Pasar el nombre ORIGINAL, no normalizado
     .fetch_optional(pool)
     .await?;
 
@@ -2792,7 +2802,7 @@ async fn try_link_student_by_name(
             student_full_name
         );
 
-        // ✅ CORREGIDO: Ejecutar el UPDATE
+        // Actualizar student con user_id y dni
         sqlx::query(
             r#"
             UPDATE students
@@ -2803,8 +2813,8 @@ async fn try_link_student_by_name(
         .bind(user_id)
         .bind(dni)
         .bind(student_id)
-        .execute(pool) // ✅ AGREGADO: .execute()
-        .await?; // ✅ AGREGADO: .await?
+        .execute(pool)
+        .await?;
 
         tracing::info!(
             "✅ Estudiante {} vinculado exitosamente: user_id={}, dni={}",
@@ -2813,13 +2823,14 @@ async fn try_link_student_by_name(
             dni
         );
 
-        Ok(Some(student_id)) // ✅ CORREGIDO: sin punto y coma
+        Ok(Some(student_id))
     } else {
         tracing::warn!(
-            "⚠️ No se encontró estudiante sin vincular con nombre: '{}'",
-            full_name
+            "⚠️ No se encontró estudiante sin vincular con nombre: '{}' (normalizado: '{}')",
+            full_name,
+            normalized_name
         );
-        Ok(None) // ✅ CORREGIDO: sin punto y coma
+        Ok(None)
     }
 }
 
