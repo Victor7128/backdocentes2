@@ -2745,6 +2745,38 @@ pub async fn backfill_dni(data: web::Data<AppState>) -> impl Responder {
     }
 }
 
+#[post("/admin/guardian-relationships")]
+pub async fn create_guardian_relationship(
+    data: web::Data<AppState>,
+    body: web::Json<CreateGuardianRelationshipIn>,
+) -> impl Responder {
+    let result = sqlx::query(
+        r#"
+        INSERT INTO guardian_student_relationships 
+        (guardian_user_id, student_user_id, relationship_type, is_primary)
+        VALUES ($1, $2, $3, $4)
+        RETURNING id
+        "#,
+    )
+    .bind(body.guardian_user_id)
+    .bind(body.student_user_id)
+    .bind(&body.relationship_type)
+    .bind(body.is_primary.unwrap_or(false))
+    .fetch_one(&data.pool)
+    .await;
+
+    match result {
+        Ok(_) => HttpResponse::Ok().json(serde_json::json!({
+            "success": true,
+            "message": "Relación creada exitosamente"
+        })),
+        Err(e) => {
+            eprintln!("Error creating relationship: {:?}", e);
+            HttpResponse::InternalServerError().body("Error al crear relación")
+        }
+    }
+}
+
 fn normalize_name(name: &str) -> String {
     name.to_uppercase()
         .replace(",", "")
@@ -2764,32 +2796,21 @@ async fn try_link_student_by_name(
     let normalized_name = normalize_name(full_name);
 
     tracing::info!(
-        "🔍 Buscando estudiante con nombre similar a: '{}' (normalizado: '{}')",
-        full_name,
+        "🔍 Buscando estudiante con nombre normalizado: '{}'",
         normalized_name
     );
 
-    // ✅ CORRECCIÓN: Usar REGEXP_REPLACE y comparar nombres normalizados
+    // ✅ SOLUCIÓN: Comparar directamente nombres normalizados
     let student = sqlx::query(
         r#"
         SELECT id, full_name, section_id
         FROM students
         WHERE user_id IS NULL
-          AND UPPER(
-              REGEXP_REPLACE(
-                  REPLACE(full_name, ',', ''),
-                  '\s+', ' ', 'g'
-              )
-          ) = UPPER(
-              REGEXP_REPLACE(
-                  REPLACE($1, ',', ''),
-                  '\s+', ' ', 'g'
-              )
-          )
+          AND UPPER(REGEXP_REPLACE(REPLACE(full_name, ',', ''), '\s+', ' ', 'g')) = $1
         LIMIT 1
         "#,
     )
-    .bind(full_name)  // ✅ CORRECCIÓN: Pasar el nombre ORIGINAL, no normalizado
+    .bind(&normalized_name) // ✅ Pasar el nombre YA normalizado
     .fetch_optional(pool)
     .await?;
 
@@ -2827,8 +2848,7 @@ async fn try_link_student_by_name(
         Ok(Some(student_id))
     } else {
         tracing::warn!(
-            "⚠️ No se encontró estudiante sin vincular con nombre: '{}' (normalizado: '{}')",
-            full_name,
+            "⚠️ No se encontró estudiante sin vincular con nombre normalizado: '{}'",
             normalized_name
         );
         Ok(None)

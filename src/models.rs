@@ -358,3 +358,12 @@ pub struct GradeWithSections {
     pub number: i32,
     pub sections: Vec<Section>,
 }
+
+#[derive(Deserialize)]
+#[allow(dead_code)]
+pub struct CreateGuardianRelationshipIn {
+    pub guardian_user_id: i32,
+    pub student_user_id: i32,
+    pub relationship_type: String,
+    pub is_primary: Option<bool>,
+}
