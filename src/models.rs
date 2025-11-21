@@ -367,3 +367,28 @@ pub struct CreateGuardianRelationshipIn {
     pub relationship_type: String,
     pub is_primary: Option<bool>,
 }
+
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct ReniecRequest {
+    pub dni: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[allow(dead_code)]
+pub struct ReniecData {
+    pub numero: String,
+    pub nombre_completo: String,
+    pub nombres: String,
+    pub apellido_paterno: String,
+    pub apellido_materno: String,
+    pub codigo_verificacion: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[allow(dead_code)]
+pub struct ReniecResponse {
+    pub success: bool,
+    pub data: Option<ReniecData>,
+    pub message: Option<String>,
+}

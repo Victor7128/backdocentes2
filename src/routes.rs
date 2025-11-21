@@ -2777,6 +2777,107 @@ pub async fn create_guardian_relationship(
     }
 }
 
+#[post("/api/validate-dni")]
+pub async fn validate_dni(body: web::Json<ReniecRequest>) -> impl Responder {
+    // Validar formato de DNI
+    if body.dni.len() != 8 || !body.dni.chars().all(|c| c.is_numeric()) {
+        return HttpResponse::BadRequest().json(serde_json::json!({
+            "success": false,
+            "message": "DNI inválido. Debe tener 8 dígitos numéricos"
+        }));
+    }
+
+    // Configurar cliente HTTP
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Error creando cliente HTTP: {:?}", e);
+            return HttpResponse::InternalServerError().json(serde_json::json!({
+                "success": false,
+                "message": "Error interno del servidor"
+            }));
+        }
+    };
+
+    // Construir request a RENIEC
+    let reniec_url = "https://apiperu.dev/api/dni";
+    let token = "Bearer 9b7d94e281d215abcea99e362033353d6a9fd467f817ac6f92fae5edab452a45";
+
+    let payload = serde_json::json!({
+        "dni": body.dni
+    });
+
+    tracing::info!("🔍 Consultando RENIEC para DNI: {}", body.dni);
+
+    // Realizar petición
+    let response = client
+        .post(reniec_url)
+        .header("Accept", "application/json")
+        .header("Content-Type", "application/json")
+        .header("Authorization", token)
+        .json(&payload)
+        .send()
+        .await;
+
+    match response {
+        Ok(resp) => {
+            let status = resp.status();
+
+            if status.is_success() {
+                match resp.json::<ReniecResponse>().await {
+                    Ok(reniec_data) => {
+                        if reniec_data.success {
+                            tracing::info!(
+                                "✅ DNI {} encontrado: {}",
+                                body.dni,
+                                reniec_data
+                                    .data
+                                    .as_ref()
+                                    .map(|d| d.nombre_completo.clone())
+                                    .unwrap_or_default()
+                            );
+                            HttpResponse::Ok().json(reniec_data)
+                        } else {
+                            tracing::warn!("⚠️ DNI {} no encontrado en RENIEC", body.dni);
+                            HttpResponse::NotFound().json(serde_json::json!({
+                                "success": false,
+                                "message": "DNI no encontrado en RENIEC"
+                            }))
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("❌ Error parseando respuesta de RENIEC: {:?}", e);
+                        HttpResponse::InternalServerError().json(serde_json::json!({
+                            "success": false,
+                            "message": "Error procesando respuesta de RENIEC"
+                        }))
+                    }
+                }
+            } else {
+                eprintln!(
+                    "❌ RENIEC respondió con status {}: {:?}",
+                    status,
+                    resp.text().await
+                );
+                HttpResponse::BadGateway().json(serde_json::json!({
+                    "success": false,
+                    "message": format!("Error en servicio RENIEC (status: {})", status)
+                }))
+            }
+        }
+        Err(e) => {
+            eprintln!("❌ Error conectando con RENIEC: {:?}", e);
+            HttpResponse::ServiceUnavailable().json(serde_json::json!({
+                "success": false,
+                "message": "No se pudo conectar con el servicio RENIEC"
+            }))
+        }
+    }
+}
+
 fn normalize_name(name: &str) -> String {
     name.to_uppercase()
         .replace(",", "")
@@ -2916,5 +3017,6 @@ pub fn config(cfg: &mut web::ServiceConfig) {
         .service(unlink_student)
         .service(link_student_by_dni)
         .service(get_linking_status)
-        .service(backfill_dni);
+        .service(backfill_dni)
+        .service(validate_dni);
 }
