@@ -1716,21 +1716,34 @@ use crate::models::{
     RegisterDocenteRequest, StudentProfile, TeacherProfile, User, UserResponse,
 };
 
+#[derive(Debug)]
+#[allow(dead_code)]
+struct LinkingInfo {
+    student_id: i32,
+    student_name: String,
+    linked_by: String,
+    success: bool,
+}
+
 /// POST /api/auth/register/alumno
 #[post("/api/auth/register/alumno")]
 pub async fn register_alumno(
     data: web::Data<AppState>,
     body: web::Json<RegisterAlumnoRequest>,
 ) -> impl Responder {
+    // ============================================
+    // 1. VALIDACIONES PREVIAS
+    // ============================================
+    
     // Validar DNI
     if body.dni.len() != 8 || !body.dni.chars().all(|c| c.is_numeric()) {
         return HttpResponse::BadRequest().json(ErrorResponse {
             error: "DNI inválido".to_string(),
-            details: Some("El DNI debe tener 8 dígitos".to_string()),
+            details: Some("El DNI debe tener 8 dígitos numéricos".to_string()),
         });
     }
 
-    // Verificar si ya existe
+    // Verificar si ya existe el usuario
     let exists = sqlx::query_scalar::<_, Option<i32>>(
         "SELECT 1 FROM users WHERE firebase_uid = $1 OR email = $2",
     )
@@ -1746,10 +1759,29 @@ pub async fn register_alumno(
         });
     }
 
+    // Verificar si el DNI ya está registrado
+    let dni_exists = sqlx::query_scalar::<_, Option<i32>>(
+        "SELECT 1 FROM student_profiles WHERE dni = $1",
+    )
+    .bind(&body.dni)
+    .fetch_optional(&data.pool)
+    .await;
+
+    if let Ok(Some(_)) = dni_exists {
+        return HttpResponse::BadRequest().json(ErrorResponse {
+            error: "DNI ya registrado".to_string(),
+            details: Some("Ya existe un estudiante con este DNI".to_string()),
+        });
+    }
+
+    // ============================================
+    // 2. CREAR USUARIO Y PERFIL EN TRANSACCIÓN
+    // ============================================
+    
     let mut tx = match data.pool.begin().await {
         Ok(t) => t,
         Err(e) => {
-            eprintln!("Error iniciando transacción: {:?}", e);
+            tracing::error!("❌ Error iniciando transacción: {:?}", e);
             return HttpResponse::InternalServerError().json(ErrorResponse {
                 error: "Error de base de datos".to_string(),
                 details: Some(e.to_string()),
@@ -1757,7 +1789,7 @@ pub async fn register_alumno(
         }
     };
 
-    // 1. Crear usuario con ENUM
+    // Crear usuario
     let user = match sqlx::query_as::<_, User>(
         r#"
         INSERT INTO users (firebase_uid, email, role, status)
@@ -1774,10 +1806,13 @@ pub async fn register_alumno(
     .fetch_one(&mut *tx)
     .await
     {
-        Ok(u) => u,
+        Ok(u) => {
+            tracing::info!("✅ Usuario creado: id={}, email={}", u.id, u.email);
+            u
+        },
         Err(e) => {
             let _ = tx.rollback().await;
-            eprintln!("Error creando usuario: {:?}", e);
+            tracing::error!("❌ Error creando usuario: {:?}", e);
             return HttpResponse::InternalServerError().json(ErrorResponse {
                 error: "Error creando usuario".to_string(),
                 details: Some(e.to_string()),
@@ -1785,7 +1820,7 @@ pub async fn register_alumno(
         }
     };
 
-    // 2. Crear perfil de alumno
+    // Crear perfil de alumno (esto disparará el trigger)
     let student_profile = match sqlx::query_as::<_, StudentProfile>(
         r#"
         INSERT INTO student_profiles (user_id, dni, full_name, enrollment_date)
@@ -1800,10 +1835,14 @@ pub async fn register_alumno(
     .fetch_one(&mut *tx)
     .await
     {
-        Ok(p) => p,
+        Ok(p) => {
+            tracing::info!("✅ Perfil de alumno creado: user_id={}, dni={}, nombre='{}'", 
+                p.user_id, p.dni, p.full_name);
+            p
+        },
         Err(e) => {
             let _ = tx.rollback().await;
-            eprintln!("Error creando perfil de alumno: {:?}", e);
+            tracing::error!("❌ Error creando perfil de alumno: {:?}", e);
             return HttpResponse::InternalServerError().json(ErrorResponse {
                 error: "Error creando perfil de alumno".to_string(),
                 details: Some(e.to_string()),
@@ -1811,61 +1850,150 @@ pub async fn register_alumno(
         }
     };
 
-    // ✅ 3. COMMIT ANTES de intentar vincular
+    // Commit de la transacción
     if let Err(e) = tx.commit().await {
-        eprintln!("Error confirmando transacción: {:?}", e);
+        tracing::error!("❌ Error confirmando transacción: {:?}", e);
         return HttpResponse::InternalServerError().json(ErrorResponse {
             error: "Error confirmando registro".to_string(),
             details: Some(e.to_string()),
         });
     }
 
-    // ✅ 4. AHORA SÍ: Intentar vincular automáticamente DESPUÉS del COMMIT
-    let linked_student_id =
-        match try_link_student_by_name(&data.pool, user.id, &body.full_name, &body.dni).await {
-            Ok(Some(student_id)) => {
-                tracing::info!(
-                    "✅ Vinculación automática exitosa: user_id={}, student_id={}",
-                    user.id,
-                    student_id
-                );
-                Some(student_id)
-            }
-            Ok(None) => {
-                tracing::warn!(
-                    "⚠️ No se pudo vincular automáticamente al alumno: {}",
-                    body.full_name
-                );
-                None
-            }
-            Err(e) => {
-                tracing::error!("❌ Error en vinculación automática: {:?}", e);
-                // No hacer rollback, el usuario ya fue creado exitosamente
-                None
-            }
-        };
+    tracing::info!("✅ Transacción confirmada exitosamente");
 
-    // Preparar respuesta con información de vinculación
+    // ============================================
+    // 3. VERIFICAR VINCULACIÓN (POST-COMMIT)
+    // ============================================
+    
+    // Esperar un momento para que el trigger se ejecute
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+    // Verificar si el trigger vinculó automáticamente
+    let linked_result = sqlx::query(
+        r#"
+        SELECT 
+            s.id AS student_id,
+            s.full_name AS student_name,
+            spl.linked_by_method,
+            spl.linked_at
+        FROM students s
+        LEFT JOIN student_profile_links spl ON spl.student_id = s.id AND spl.user_id = s.user_id
+        WHERE s.user_id = $1
+        LIMIT 1
+        "#
+    )
+    .bind(user.id)
+    .fetch_optional(&data.pool)
+    .await;
+
+    let linking_info = match linked_result {
+        Ok(Some(row)) => {
+            let student_id: i32 = row.try_get("student_id").unwrap();
+            let student_name: String = row.try_get("student_name").unwrap();
+            let method: Option<String> = row.try_get("linked_by_method").ok();
+            
+            tracing::info!(
+                "✅ Trigger vinculó automáticamente: user_id={}, student_id={}, nombre='{}', método={:?}",
+                user.id, student_id, student_name, method
+            );
+            
+            Some(LinkingInfo {
+                student_id,
+                student_name,
+                linked_by: method.unwrap_or_else(|| "auto".to_string()),
+                success: true,
+            })
+        }
+        Ok(None) => {
+            tracing::warn!("⚠️ Trigger NO vinculó automáticamente, intentando vinculación manual...");
+            
+            // Intentar vinculación manual como fallback
+            match try_link_student_by_name(&data.pool, user.id, &body.full_name, &body.dni).await {
+                Ok(Some(student_id)) => {
+                    tracing::info!(
+                        "✅ Vinculación manual exitosa: user_id={}, student_id={}",
+                        user.id, student_id
+                    );
+                    
+                    // Obtener nombre del estudiante vinculado
+                    let student_name = sqlx::query_scalar::<_, String>(
+                        "SELECT full_name FROM students WHERE id = $1"
+                    )
+                    .bind(student_id)
+                    .fetch_one(&data.pool)
+                    .await
+                    .unwrap_or_else(|_| body.full_name.clone());
+                    
+                    Some(LinkingInfo {
+                        student_id,
+                        student_name,
+                        linked_by: "manual".to_string(),
+                        success: true,
+                    })
+                }
+                Ok(None) => {
+                    tracing::warn!("⚠️ No se encontró estudiante para vincular: '{}'", body.full_name);
+                    None
+                }
+                Err(e) => {
+                    tracing::error!("❌ Error en vinculación manual: {:?}", e);
+                    None
+                }
+            }
+        }
+        Err(e) => {
+            tracing::error!("❌ Error verificando vinculación: {:?}", e);
+            None
+        }
+    };
+
+    // ============================================
+    // 4. PREPARAR RESPUESTA
+    // ============================================
+    
     let mut profile_data = serde_json::json!({
         "dni": student_profile.dni,
         "full_name": student_profile.full_name,
         "enrollment_date": student_profile.enrollment_date,
     });
 
-    if let Some(student_id) = linked_student_id {
-        profile_data["linked_student_id"] = serde_json::json!(student_id);
-        profile_data["auto_linked"] = serde_json::json!(true);
+    let (message, is_linked) = if let Some(info) = linking_info {
+        profile_data["linked_student_id"] = serde_json::json!(info.student_id);
+        profile_data["linked_student_name"] = serde_json::json!(info.student_name);
+        profile_data["linked_by_method"] = serde_json::json!(info.linked_by);
+        profile_data["auto_linked"] = serde_json::json!(info.linked_by == "dni_auto" || info.linked_by == "full_name_auto");
+        
+        let method_desc = match info.linked_by.as_str() {
+            "dni_auto" => "por DNI (automático)",
+            "full_name_auto" => "por nombre (automático)",
+            "full_name_manual" => "por nombre (manual)",
+            _ => "exitosamente"
+        };
+        
+        (
+            format!("Alumno registrado y vinculado {}", method_desc),
+            true
+        )
     } else {
         profile_data["auto_linked"] = serde_json::json!(false);
-    }
+        profile_data["linking_note"] = serde_json::json!(
+            "No se encontró un registro previo para vincular. El alumno podrá ser vinculado manualmente más tarde."
+        );
+        
+        (
+            "Alumno registrado exitosamente (sin vinculación automática)".to_string(),
+            false
+        )
+    };
+
+    tracing::info!(
+        "🎉 Registro completado: user_id={}, dni={}, vinculado={}",
+        user.id, body.dni, is_linked
+    );
 
     HttpResponse::Created().json(ApiResponse {
         success: true,
-        message: if linked_student_id.is_some() {
-            "Alumno registrado y vinculado automáticamente".to_string()
-        } else {
-            "Alumno registrado exitosamente".to_string()
-        },
+        message,
         data: Some(UserResponse {
             id: user.id,
             email: user.email.clone(),
@@ -2875,14 +3003,6 @@ pub async fn validate_dni(body: web::Json<ReniecRequest>) -> impl Responder {
     }
 }
 
-fn normalize_name(name: &str) -> String {
-    name.to_uppercase()
-        .replace(",", "")
-        .split_whitespace()
-        .filter(|s| !s.is_empty())
-        .collect::<Vec<_>>()
-        .join(" ")
-}
 
 /// Intenta vincular automáticamente un estudiante por similitud de nombre
 async fn try_link_student_by_name(
@@ -2891,24 +3011,19 @@ async fn try_link_student_by_name(
     full_name: &str,
     dni: &str,
 ) -> Result<Option<i32>, sqlx::Error> {
-    let normalized_name = normalize_name(full_name);
+    tracing::info!("🔍 Buscando estudiante para vincular: '{}'", full_name);
 
-    tracing::info!(
-        "🔍 Buscando estudiante con nombre normalizado: '{}'",
-        normalized_name
-    );
-
-    // ✅ SOLUCIÓN: Comparar directamente nombres normalizados
+    // ✅ AHORA usa la función normalize_name de SQL directamente
     let student = sqlx::query(
         r#"
         SELECT id, full_name, section_id
         FROM students
         WHERE user_id IS NULL
-          AND UPPER(REGEXP_REPLACE(REPLACE(full_name, ',', ''), '\s+', ' ', 'g')) = $1
+          AND public.normalize_name(full_name) = public.normalize_name($1)
         LIMIT 1
         "#,
     )
-    .bind(&normalized_name) // ✅ Pasar el nombre YA normalizado
+    .bind(full_name) // ✅ Ya no necesitas normalizar en Rust
     .fetch_optional(pool)
     .await?;
 
@@ -2936,6 +3051,21 @@ async fn try_link_student_by_name(
         .execute(pool)
         .await?;
 
+        // Registrar en auditoría
+        sqlx::query(
+            r#"
+            INSERT INTO student_profile_links (student_id, user_id, linked_by_method)
+            VALUES ($1, $2, 'full_name_manual')
+            ON CONFLICT (student_id, user_id) DO UPDATE
+            SET linked_by_method = 'full_name_manual',
+                linked_at = NOW()
+            "#,
+        )
+        .bind(student_id)
+        .bind(user_id)
+        .execute(pool)
+        .await?;
+
         tracing::info!(
             "✅ Estudiante {} vinculado exitosamente: user_id={}, dni={}",
             student_full_name,
@@ -2946,8 +3076,8 @@ async fn try_link_student_by_name(
         Ok(Some(student_id))
     } else {
         tracing::warn!(
-            "⚠️ No se encontró estudiante sin vincular con nombre normalizado: '{}'",
-            normalized_name
+            "⚠️ No se encontró estudiante sin vincular con nombre: '{}'",
+            full_name
         );
         Ok(None)
     }

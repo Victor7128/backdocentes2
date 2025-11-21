@@ -394,4 +394,3 @@ pub struct ReniecResponse {
     pub data: Option<ReniecData>,
     pub message: Option<String>,
 }
-
