@@ -2830,15 +2830,12 @@ pub async fn validate_dni(body: web::Json<ReniecRequest>) -> impl Responder {
                 match resp.json::<ReniecResponse>().await {
                     Ok(reniec_data) => {
                         if reniec_data.success {
-                            tracing::info!(
-                                "✅ DNI {} encontrado: {}",
-                                body.dni,
-                                reniec_data
-                                    .data
-                                    .as_ref()
-                                    .map(|d| d.nombre_completo.clone())
-                                    .unwrap_or_default()
-                            );
+                            let nombre = reniec_data
+                                .data
+                                .as_ref()
+                                .and_then(|d| d.nombre_completo.clone())
+                                .unwrap_or_else(|| "Sin nombre".to_string());
+                            tracing::info!("✅ DNI {} encontrado: {}", body.dni, nombre);
                             HttpResponse::Ok().json(reniec_data)
                         } else {
                             tracing::warn!("⚠️ DNI {} no encontrado en RENIEC", body.dni);

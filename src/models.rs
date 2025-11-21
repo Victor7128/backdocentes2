@@ -377,11 +377,13 @@ pub struct ReniecRequest {
 #[derive(Debug, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub struct ReniecData {
-    pub numero: String,
-    pub nombre_completo: String,
-    pub nombres: String,
-    pub apellido_paterno: String,
-    pub apellido_materno: String,
+    pub numero: Option<String>,
+    pub nombre_completo: Option<String>,
+    pub nombres: Option<String>,
+    pub apellido_paterno: Option<String>,
+    pub apellido_materno: Option<String>,
+
+    #[serde(rename = "codVerifica")]
     pub codigo_verificacion: Option<String>,
 }
 
@@ -392,3 +394,4 @@ pub struct ReniecResponse {
     pub data: Option<ReniecData>,
     pub message: Option<String>,
 }
+
