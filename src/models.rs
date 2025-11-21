@@ -204,17 +204,97 @@ pub struct Student {
     pub dni: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, sqlx::FromRow)]
+#[allow(dead_code)]
 pub struct StudentGradeItem {
     pub full_name: String,
     pub section_letter: String,
     pub grade_number: i32,
     pub bimester_name: String,
-    pub session_title: Option<String>,
-    pub competency_name: Option<String>,
+    pub session_title: String,
+    pub competency_name: String,
+    pub ability_name: String,
+    pub criterion_name: String,
     pub value: String,
     pub observation: Option<String>,
     pub updated_at: chrono::NaiveDateTime,
+}
+
+#[derive(Serialize)]
+pub struct StudentGradeSession {
+    pub bimester_name: String,
+    pub grade_number: i32,
+    pub section_letter: String,
+    pub session_title: String,
+    pub competencies: Vec<StudentGradeCompetency>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct StudentGradeAbility {
+    pub ability_name: String,
+    pub criteria: Vec<StudentGradeCriterion>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct StudentGradeCompetency {
+    pub competency_name: String,
+    pub abilities: Vec<StudentGradeAbility>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct StudentGradeCriterion {
+    pub criterion_name: String,
+    pub value: String,
+    pub observation: Option<String>,
+    pub updated_at: chrono::NaiveDateTime,
+}
+
+#[derive(Serialize)]
+#[allow(dead_code)]
+pub struct CriterionItem {
+    pub name: String,
+    pub value: String,
+    pub observation: Option<String>,
+    pub updated_at: String,
+}
+
+#[derive(Serialize)]
+#[allow(dead_code)]
+pub struct AbilityItem {
+    pub name: String,
+    pub criteria: Vec<CriterionItem>,
+}
+
+#[derive(Serialize)]
+#[allow(dead_code)]
+pub struct CompetencyItem {
+    pub name: String,
+    pub abilities: Vec<AbilityItem>,
+}
+
+#[derive(Serialize)]
+#[allow(dead_code)]
+pub struct SessionGrades {
+    pub session_title: String,
+    pub bimester_name: String,
+    pub section_letter: String,
+    pub grade_number: i32,
+    pub competencies: Vec<CompetencyItem>,
+}
+
+#[derive(Deserialize)]
+#[allow(dead_code)]
+pub struct FlatGradeRow {
+    pub session_title: String,
+    pub bimester_name: String,
+    pub section_letter: String,
+    pub grade_number: i32,
+    pub competency_name: String,
+    pub ability_name: String,
+    pub criterion_name: String,
+    pub value: String,
+    pub observation: Option<String>,
+    pub updated_at: String,
 }
 
 #[derive(Serialize)]

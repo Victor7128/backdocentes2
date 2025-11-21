@@ -1734,7 +1734,7 @@ pub async fn register_alumno(
     // ============================================
     // 1. VALIDACIONES PREVIAS
     // ============================================
-    
+
     // Validar DNI
     if body.dni.len() != 8 || !body.dni.chars().all(|c| c.is_numeric()) {
         return HttpResponse::BadRequest().json(ErrorResponse {
@@ -1760,12 +1760,11 @@ pub async fn register_alumno(
     }
 
     // Verificar si el DNI ya está registrado
-    let dni_exists = sqlx::query_scalar::<_, Option<i32>>(
-        "SELECT 1 FROM student_profiles WHERE dni = $1",
-    )
-    .bind(&body.dni)
-    .fetch_optional(&data.pool)
-    .await;
+    let dni_exists =
+        sqlx::query_scalar::<_, Option<i32>>("SELECT 1 FROM student_profiles WHERE dni = $1")
+            .bind(&body.dni)
+            .fetch_optional(&data.pool)
+            .await;
 
     if let Ok(Some(_)) = dni_exists {
         return HttpResponse::BadRequest().json(ErrorResponse {
@@ -1777,7 +1776,7 @@ pub async fn register_alumno(
     // ============================================
     // 2. CREAR USUARIO Y PERFIL EN TRANSACCIÓN
     // ============================================
-    
+
     let mut tx = match data.pool.begin().await {
         Ok(t) => t,
         Err(e) => {
@@ -1809,7 +1808,7 @@ pub async fn register_alumno(
         Ok(u) => {
             tracing::info!("✅ Usuario creado: id={}, email={}", u.id, u.email);
             u
-        },
+        }
         Err(e) => {
             let _ = tx.rollback().await;
             tracing::error!("❌ Error creando usuario: {:?}", e);
@@ -1836,10 +1835,14 @@ pub async fn register_alumno(
     .await
     {
         Ok(p) => {
-            tracing::info!("✅ Perfil de alumno creado: user_id={}, dni={}, nombre='{}'", 
-                p.user_id, p.dni, p.full_name);
+            tracing::info!(
+                "✅ Perfil de alumno creado: user_id={}, dni={}, nombre='{}'",
+                p.user_id,
+                p.dni,
+                p.full_name
+            );
             p
-        },
+        }
         Err(e) => {
             let _ = tx.rollback().await;
             tracing::error!("❌ Error creando perfil de alumno: {:?}", e);
@@ -1864,7 +1867,7 @@ pub async fn register_alumno(
     // ============================================
     // 3. VERIFICAR VINCULACIÓN (POST-COMMIT)
     // ============================================
-    
+
     // Esperar un momento para que el trigger se ejecute
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
@@ -1880,7 +1883,7 @@ pub async fn register_alumno(
         LEFT JOIN student_profile_links spl ON spl.student_id = s.id AND spl.user_id = s.user_id
         WHERE s.user_id = $1
         LIMIT 1
-        "#
+        "#,
     )
     .bind(user.id)
     .fetch_optional(&data.pool)
@@ -1891,12 +1894,12 @@ pub async fn register_alumno(
             let student_id: i32 = row.try_get("student_id").unwrap();
             let student_name: String = row.try_get("student_name").unwrap();
             let method: Option<String> = row.try_get("linked_by_method").ok();
-            
+
             tracing::info!(
                 "✅ Trigger vinculó automáticamente: user_id={}, student_id={}, nombre='{}', método={:?}",
                 user.id, student_id, student_name, method
             );
-            
+
             Some(LinkingInfo {
                 student_id,
                 student_name,
@@ -1905,25 +1908,28 @@ pub async fn register_alumno(
             })
         }
         Ok(None) => {
-            tracing::warn!("⚠️ Trigger NO vinculó automáticamente, intentando vinculación manual...");
-            
+            tracing::warn!(
+                "⚠️ Trigger NO vinculó automáticamente, intentando vinculación manual..."
+            );
+
             // Intentar vinculación manual como fallback
             match try_link_student_by_name(&data.pool, user.id, &body.full_name, &body.dni).await {
                 Ok(Some(student_id)) => {
                     tracing::info!(
                         "✅ Vinculación manual exitosa: user_id={}, student_id={}",
-                        user.id, student_id
+                        user.id,
+                        student_id
                     );
-                    
+
                     // Obtener nombre del estudiante vinculado
                     let student_name = sqlx::query_scalar::<_, String>(
-                        "SELECT full_name FROM students WHERE id = $1"
+                        "SELECT full_name FROM students WHERE id = $1",
                     )
                     .bind(student_id)
                     .fetch_one(&data.pool)
                     .await
                     .unwrap_or_else(|_| body.full_name.clone());
-                    
+
                     Some(LinkingInfo {
                         student_id,
                         student_name,
@@ -1932,7 +1938,10 @@ pub async fn register_alumno(
                     })
                 }
                 Ok(None) => {
-                    tracing::warn!("⚠️ No se encontró estudiante para vincular: '{}'", body.full_name);
+                    tracing::warn!(
+                        "⚠️ No se encontró estudiante para vincular: '{}'",
+                        body.full_name
+                    );
                     None
                 }
                 Err(e) => {
@@ -1950,7 +1959,7 @@ pub async fn register_alumno(
     // ============================================
     // 4. PREPARAR RESPUESTA
     // ============================================
-    
+
     let mut profile_data = serde_json::json!({
         "dni": student_profile.dni,
         "full_name": student_profile.full_name,
@@ -1961,34 +1970,37 @@ pub async fn register_alumno(
         profile_data["linked_student_id"] = serde_json::json!(info.student_id);
         profile_data["linked_student_name"] = serde_json::json!(info.student_name);
         profile_data["linked_by_method"] = serde_json::json!(info.linked_by);
-        profile_data["auto_linked"] = serde_json::json!(info.linked_by == "dni_auto" || info.linked_by == "full_name_auto");
-        
+        profile_data["auto_linked"] =
+            serde_json::json!(info.linked_by == "dni_auto" || info.linked_by == "full_name_auto");
+
         let method_desc = match info.linked_by.as_str() {
             "dni_auto" => "por DNI (automático)",
             "full_name_auto" => "por nombre (automático)",
             "full_name_manual" => "por nombre (manual)",
-            _ => "exitosamente"
+            _ => "exitosamente",
         };
-        
+
         (
             format!("Alumno registrado y vinculado {}", method_desc),
-            true
+            true,
         )
     } else {
         profile_data["auto_linked"] = serde_json::json!(false);
         profile_data["linking_note"] = serde_json::json!(
             "No se encontró un registro previo para vincular. El alumno podrá ser vinculado manualmente más tarde."
         );
-        
+
         (
             "Alumno registrado exitosamente (sin vinculación automática)".to_string(),
-            false
+            false,
         )
     };
 
     tracing::info!(
         "🎉 Registro completado: user_id={}, dni={}, vinculado={}",
-        user.id, body.dni, is_linked
+        user.id,
+        body.dni,
+        is_linked
     );
 
     HttpResponse::Created().json(ApiResponse {
@@ -2444,13 +2456,19 @@ pub async fn get_student_grades(path: web::Path<i32>, data: web::Data<AppState>)
 
     let rows = sqlx::query(
         r#"
-        SELECT 
+        SELECT
             s.full_name,
-            sec.letter,
+            sec.letter AS section_letter,
             g.number AS grade_number,
             b.name AS bimester_name,
+            sess.id AS session_id,
             sess.title AS session_title,
+            comp.id AS competency_id,
             comp.name AS competency_name,
+            abl.id AS ability_id,
+            abl.name AS ability_name,
+            crt.id AS criterion_id,
+            crt.name AS criterion_name,
             ei.value::text AS value,
             ei.observation,
             ei.updated_at
@@ -2461,38 +2479,101 @@ pub async fn get_student_grades(path: web::Path<i32>, data: web::Data<AppState>)
         JOIN grades g ON g.id = sec.grade_id
         JOIN bimesters b ON b.id = g.bimester_id
         JOIN competencies comp ON comp.id = ei.competency_id
+        JOIN abilities abl ON abl.id = ei.ability_id
+        JOIN criteria crt ON crt.id = ei.criterion_id
         WHERE s.user_id = $1
-        ORDER BY b.year DESC, b.id DESC, sess.number, comp.number
+        ORDER BY b.id, sess.number, comp.number, abl.number, crt.number
         "#,
     )
     .bind(user_id)
     .fetch_all(&data.pool)
     .await;
 
-    match rows {
-        Ok(data) => {
-            let grades: Vec<StudentGradeItem> = data
-                .into_iter()
-                .map(|row| StudentGradeItem {
-                    full_name: row.try_get("full_name").unwrap(),
-                    section_letter: row.try_get("letter").unwrap(),
-                    grade_number: row.try_get("grade_number").unwrap(),
-                    bimester_name: row.try_get("bimester_name").unwrap(),
-                    session_title: row.try_get("session_title").unwrap(),
-                    competency_name: row.try_get("competency_name").unwrap(),
-                    value: row.try_get("value").unwrap(),
-                    observation: row.try_get("observation").unwrap(),
-                    updated_at: row.try_get("updated_at").unwrap(),
-                })
-                .collect();
-
-            HttpResponse::Ok().json(grades)
-        }
-        Err(e) => {
-            eprintln!("Error fetching grades: {:?}", e);
-            HttpResponse::InternalServerError().body("Error al obtener notas")
-        }
+    if let Err(e) = rows {
+        eprintln!("SQL ERROR: {:?}", e);
+        return HttpResponse::InternalServerError().body("Error al obtener notas");
     }
+
+    let rows = rows.unwrap();
+
+    use std::collections::HashMap;
+
+    // Agrupadores
+    let mut sessions_map: HashMap<i32, StudentGradeSession> = HashMap::new();
+    let mut competencies_map: HashMap<(i32, i32), StudentGradeCompetency> = HashMap::new();
+    let mut abilities_map: HashMap<(i32, i32, i32), StudentGradeAbility> = HashMap::new();
+
+    for row in rows {
+        let session_id: i32 = row.try_get("session_id").unwrap();
+        let competency_id: i32 = row.try_get("competency_id").unwrap();
+        let ability_id: i32 = row.try_get("ability_id").unwrap();
+
+        // Crear sesión si no existe
+        sessions_map
+            .entry(session_id)
+            .or_insert_with(|| StudentGradeSession {
+                bimester_name: row.try_get("bimester_name").unwrap(),
+                grade_number: row.try_get("grade_number").unwrap(),
+                section_letter: row.try_get("section_letter").unwrap(),
+                session_title: row.try_get("session_title").unwrap(),
+                competencies: vec![],
+            });
+
+        // Crear competencia si no existe
+        competencies_map
+            .entry((session_id, competency_id))
+            .or_insert_with(|| StudentGradeCompetency {
+                competency_name: row.try_get("competency_name").unwrap(),
+                abilities: vec![],
+            });
+
+        // Crear habilidad si no existe
+        abilities_map
+            .entry((session_id, competency_id, ability_id))
+            .or_insert_with(|| StudentGradeAbility {
+                ability_name: row.try_get("ability_name").unwrap(),
+                criteria: vec![],
+            });
+
+        // Agregar criterio
+        let criterion = StudentGradeCriterion {
+            criterion_name: row.try_get("criterion_name").unwrap(),
+            value: row.try_get("value").unwrap(),
+            observation: row.try_get("observation").ok(),
+            updated_at: row.try_get("updated_at").unwrap(),
+        };
+
+        abilities_map
+            .get_mut(&(session_id, competency_id, ability_id))
+            .unwrap()
+            .criteria
+            .push(criterion);
+    }
+
+    // Enlazar abilities → competencies
+    for ((session_id, competency_id), competency) in competencies_map {
+        let mut merged_competency = competency;
+
+        for ((s_id, c_id, _), ability) in &abilities_map {
+            if *s_id == session_id && *c_id == competency_id {
+                merged_competency.abilities.push(ability.clone());
+            }
+        }
+
+        sessions_map
+            .get_mut(&session_id)
+            .unwrap()
+            .competencies
+            .push(merged_competency);
+    }
+
+    // Convertir a vector
+    let mut sessions: Vec<StudentGradeSession> = sessions_map.into_iter().map(|(_, v)| v).collect();
+
+    // Orden por título
+    sessions.sort_by(|a, b| a.session_title.cmp(&b.session_title));
+
+    HttpResponse::Ok().json(sessions)
 }
 
 #[post("/admin/link-student")]
@@ -3003,8 +3084,6 @@ pub async fn validate_dni(body: web::Json<ReniecRequest>) -> impl Responder {
     }
 }
 
-
-/// Intenta vincular automáticamente un estudiante por similitud de nombre
 async fn try_link_student_by_name(
     pool: &PgPool,
     user_id: i32,
