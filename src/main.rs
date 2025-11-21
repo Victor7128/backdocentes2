@@ -14,7 +14,7 @@ use std::env;
 async fn actix_web(
 ) -> ShuttleActixWeb<impl FnOnce(&mut web::ServiceConfig) + Send + Clone + 'static> {
     // Obtiene la cadena de conexión DATABASE_URL del entorno
-    let db_url = String::from("postgres://avnadmin:AVNS_sJCH7rinERc5mr4ANep@pg-13831912-tortugaazul7128-922b.e.aivencloud.com:28928/defaultdb?sslmode=require");
+    let db_url = String::from("postgres://avnadmin:AVNS__WBhLn_dkf1AWfqU2pu@pg-a675765-vtuesta13-92c1.b.aivencloud.com:11427/defaultdb?sslmode=require");
 
     // Crea el pool de conexiones
     let pool: PgPool = PgPoolOptions::new()
