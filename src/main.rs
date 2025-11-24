@@ -35,8 +35,8 @@ async fn actix_web(
                 http::header::CONTENT_TYPE,
                 http::header::AUTHORIZATION,
                 http::header::ACCEPT,
+                http::header::HeaderName::from_static("x-firebase-uid"),
             ])
-            .supports_credentials()
             .max_age(3600);
 
         // Creamos la aplicación Actix Web
