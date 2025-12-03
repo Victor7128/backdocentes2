@@ -1,10 +1,11 @@
-// main.rs
+mod auth;
+mod basic;
+mod links;
 mod models;
-mod routes;
+use crate::models::AppState;
 
 use actix_cors::Cors;
 use actix_web::{http, web};
-use routes::{config, AppState};
 use shuttle_actix_web::ShuttleActixWeb;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
@@ -13,10 +14,8 @@ use std::env;
 #[shuttle_runtime::main]
 async fn actix_web(
 ) -> ShuttleActixWeb<impl FnOnce(&mut web::ServiceConfig) + Send + Clone + 'static> {
-    // Obtiene la cadena de conexión DATABASE_URL del entorno
     let db_url = String::from("postgres://avnadmin:AVNS__WBhLn_dkf1AWfqU2pu@pg-a675765-vtuesta13-92c1.b.aivencloud.com:11427/defaultdb?sslmode=require");
 
-    // Crea el pool de conexiones
     let pool: PgPool = PgPoolOptions::new()
         .max_connections(5)
         .connect(&db_url)
@@ -25,9 +24,7 @@ async fn actix_web(
 
     let state = AppState { pool };
 
-    // Construimos el cierre que creará la aplicación
     let app = move |cfg: &mut web::ServiceConfig| {
-        // Configuración CORS - Segura para desarrollo
         let cors = Cors::default()
             .allow_any_origin()
             .allowed_methods(vec!["GET", "POST", "PUT", "DELETE", "OPTIONS"])
@@ -39,14 +36,21 @@ async fn actix_web(
             ])
             .max_age(3600);
 
-        // Creamos la aplicación Actix Web
         cfg.service(
             web::scope("")
-                .wrap(cors) // Aplicamos el middleware CORS aquí
+                .wrap(cors)
                 .app_data(web::Data::new(state.clone()))
-                .configure(config), // Configuramos nuestras rutas
+                .configure(auth::routes::config)
+                .configure(links::routes::config)
+                .configure(basic::routes::config)
+                .configure(basic::students::routes::config)
+                .configure(basic::session::routes::config)
+                .configure(basic::session::products::routes::config)
+                .configure(basic::session::evaluation::routes::config)
+                .configure(basic::session::competencies::routes::config)
+                .configure(basic::session::competencies::abilities::routes::config)
+                .configure(basic::session::competencies::abilities::criterion::routes::config)
         );
     };
-
     Ok(app.into())
 }
